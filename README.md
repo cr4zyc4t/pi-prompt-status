@@ -3,7 +3,7 @@
 One status line per **response** in [pi](https://pi.dev), written into the transcript when the agent fully settles:
 
 ```
-◷ 14:33:05 · ⏱ 1m20s · TTFT 0.83s · ⚡ 42 tok/s · ↑ 12.3k · ↓ 1.2k · cache 88%
+◷ 14:33:05 · ⏱ 1m20s · TTFT 0.83s · ⚡ 42 tok/s · ↑ 12.3k · ↓ 1.2k · cache 88% · ≈$0.0043
 ```
 
 A response is the whole unit of work: **prompt submitted → agent settled**, so every provider request, tool call,
@@ -18,6 +18,7 @@ retry, compaction recovery, and queued continuation in between is measured as on
 | `sent` | `↑` | `↑ 12.3k` | Prompt tokens the provider was sent, summed over every request: `input + cache read + cache write`. |
 | `recv` | `↓` | `↓ 1.2k` | Output tokens received, summed over every request. |
 | `cache` | `cache` | `cache 88%` | `cache read / (input + cache read + cache write)` for the response. Never rounds a partial hit up to 100%; shows `<1%`, `0%`, or `n/a`. |
+| `cost` | `$` | `≈$0.0043` | Summed `usage.cost.total` over every request. `$` means the provider billed figure; `≈$` means pi's catalog estimate. The whole field disappears for models with no pricing data. |
 
 Order and visibility are yours: `order` sets position, `show`/`hide` toggle each field, and each field keeps its own
 icon. Only `tok/s` carries a word — sent and received read from their arrows alone.
@@ -58,7 +59,7 @@ The status is a `prompt-status` **custom session entry** (`pi.appendEntry`) with
 ```json
 {
   "enabled": true,
-  "fields": ["finished", "duration", "ttft", "tps", "sent", "recv", "cache"],
+  "fields": ["finished", "duration", "ttft", "tps", "sent", "recv", "cache", "cost"],
   "hidden": [],
   "tpsMode": "response",
   "sentIncludesCache": true,
@@ -97,7 +98,7 @@ The status is a `prompt-status` **custom session entry** (`pi.appendEntry`) with
 | `cache on\|off` | Whether `sent` includes cache tokens. |
 | `aborted on\|off` | Write statuses for aborted runs. |
 | `last` | Print the last status again. |
-| `stats` | Session totals: responses, wall time, streaming time, avg tok/s, avg cache hit, total sent/received. |
+| `stats` | Session totals: responses, wall time, streaming time, avg tok/s, avg cache hit, total sent/received, and cost. |
 | `path` / `reset` | Show or reset the config file. |
 
 Field arguments accept commas or spaces (`hide ttft cache`), and unknown names are reported instead of silently
@@ -112,6 +113,11 @@ dropped. Hiding every field disables line rendering entirely.
 - Durations use a monotonic clock (`performance.now()`); wall-clock jumps cannot corrupt them.
 - `cache` is per response, so it rises across a session as the prompt prefix gets cached, unlike pi's session-level
   cache figure.
+- Cost is the sum of what pi reports per request. `usage.cost.totalFromProvider` decides the marker: every request
+  billed → `$0.0043`, any catalog estimate → `≈$0.0043`. A model whose catalog carries no prices yields `cost = null`
+  and renders nothing at all, so unpriced models never show a misleading `$0`.
+- Nested tool usage (subagents, classifier calls) keeps its own cost in the expanded line. It enters `cost` only when
+  `includeNestedUsage` is on.
 - A settle with no assistant request produces no entry, so idle `agent_settled` noise stays out of the transcript.
 - Not attributed: compaction and branch-summary token spend (they are not assistant messages), and anything a nested
   agent spent unless `includeNestedUsage` is on.

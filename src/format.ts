@@ -7,10 +7,10 @@
 
 export type TpsMode = "response" | "generation";
 
-export type StatusField = "duration" | "finished" | "ttft" | "tps" | "sent" | "recv" | "cache";
+export type StatusField = "duration" | "finished" | "ttft" | "tps" | "sent" | "recv" | "cache" | "cost";
 
-/** Render order out of the box: finish time, duration, TTFT, tokens/s, sent, recv, cache. */
-export const ALL_FIELDS: StatusField[] = ["finished", "duration", "ttft", "tps", "sent", "recv", "cache"];
+/** Render order out of the box: finish time, duration, TTFT, tokens/s, sent, recv, cache, cost. */
+export const ALL_FIELDS: StatusField[] = ["finished", "duration", "ttft", "tps", "sent", "recv", "cache", "cost"];
 
 export function isStatusField(value: unknown): value is StatusField {
 	return typeof value === "string" && (ALL_FIELDS as string[]).includes(value);
@@ -58,6 +58,11 @@ export interface PromptStatusData {
 	aborted: boolean;
 	nestedSent: number;
 	nestedRecv: number;
+	nestedCost: number;
+	/** Sum of `usage.cost.total`, or null when no request reported cost data. */
+	cost: number | null;
+	/** True when every cost figure was billed by the provider; false when any part is a catalog estimate. */
+	costBilled: boolean | null;
 	tpsMode: TpsMode;
 }
 
@@ -73,6 +78,15 @@ export function fmtDuration(ms: number): string {
 	const hours = Math.floor(totalMin / 60);
 	if (hours < 24) return `${hours}h${totalMin % 60}m`;
 	return `${Math.floor(hours / 24)}d${hours % 24}h`;
+}
+
+/** `0`, `0.0043`, `0.123`, `1.5`, `12.35`, `1.2k`. The currency sign comes from the field icon. */
+export function fmtCost(total: number): string {
+	if (!Number.isFinite(total) || total <= 0) return "0";
+	if (total >= 1000) return `${trimZero((total / 1000).toFixed(1))}k`;
+	if (total >= 1) return trimZero(total.toFixed(2));
+	if (total >= 0.1) return trimZero(total.toFixed(3));
+	return trimZero(total.toFixed(4));
 }
 
 /** Time to first token: `840ms`, `1.2s`, `12s`, `1m20s`. */
@@ -122,6 +136,8 @@ export interface StatusPart {
 	icon: string;
 	label: string;
 	value: string;
+	/** Render the value directly after the icon, as in `$0.0043`. */
+	glue?: boolean;
 }
 
 const ICONS: Record<StatusField, string> = {
@@ -132,6 +148,7 @@ const ICONS: Record<StatusField, string> = {
 	sent: "↑",
 	recv: "↓",
 	cache: "cache",
+	cost: "$",
 };
 
 /** Only tokens/s carries a word; the rest read from their icon. */
@@ -143,6 +160,7 @@ const LABELS: Record<StatusField, string> = {
 	sent: "",
 	recv: "",
 	cache: "",
+	cost: "",
 };
 
 export function iconOf(field: StatusField): string {
@@ -176,6 +194,16 @@ export function statusParts(data: PromptStatusData, fields: StatusField[]): Stat
 			case "cache":
 				parts.push({ icon, label, value: fmtPct(data.cacheHitPct) });
 				break;
+			case "cost":
+				// Omitted entirely for models without pricing data.
+				if (data.cost === null || data.cost === undefined) break;
+				parts.push({
+					icon: data.costBilled === true ? "$" : "≈$",
+					label,
+					value: fmtCost(data.cost),
+					glue: true,
+				});
+				break;
 		}
 	}
 	return parts;
@@ -184,7 +212,10 @@ export function statusParts(data: PromptStatusData, fields: StatusField[]): Stat
 /** Single-line, plain-text status. Used for tests, `notify`, and footer status. */
 export function statusLine(data: PromptStatusData, fields: StatusField[], separator = " · "): string {
 	const text = statusParts(data, fields)
-		.map((p) => (p.label ? `${p.icon} ${p.value} ${p.label}` : `${p.icon} ${p.value}`))
+		.map((p) => {
+			const head = `${p.icon}${p.glue ? "" : " "}${p.value}`;
+			return p.label ? `${head} ${p.label}` : head;
+		})
 		.join(separator);
 	return data.aborted ? `aborted${separator}${text}` : text;
 }
@@ -200,7 +231,8 @@ export function statusDetail(data: PromptStatusData): string {
 	if (data.input > 0) bits.push(`uncached ↑${fmtCount(data.input)}`);
 	if (data.cacheWrite > 0) bits.push(`cache w ${fmtCount(data.cacheWrite)}`);
 	if (data.nestedSent > 0 || data.nestedRecv > 0) {
-		bits.push(`nested ↑${fmtCount(data.nestedSent)} ↓${fmtCount(data.nestedRecv)}`);
+		const nested = `nested ↑${fmtCount(data.nestedSent)} ↓${fmtCount(data.nestedRecv)}`;
+		bits.push(data.nestedCost > 0 ? `${nested} ≈$${fmtCost(data.nestedCost)}` : nested);
 	}
 	if (data.models.length > 0) bits.push(data.models.join(", "));
 	return bits.join(" · ");

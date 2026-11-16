@@ -10,6 +10,7 @@ import {
 	fmtPct,
 	fmtRate,
 	fmtTtft,
+	fmtCost,
 	resolveFields,
 	statusDetail,
 	statusLine,
@@ -61,6 +62,15 @@ eq(fmtPct(87.4), "87%", "cache rounded");
 eq(fmtPct(99.6), "99%", "cache never rounds up to 100");
 eq(fmtPct(100), "100%", "cache full hit");
 
+// cost: adaptive precision, currency sign carried by the icon
+eq(fmtCost(0), "0", "cost zero");
+eq(fmtCost(0.004321), "0.0043", "cost small");
+eq(fmtCost(0.1234), "0.123", "cost under one tenth");
+eq(fmtCost(0.1), "0.1", "cost trims zeros");
+eq(fmtCost(1.5), "1.5", "cost over one");
+eq(fmtCost(12.345), "12.35", "cost two decimals");
+eq(fmtCost(1234), "1.2k", "cost thousands");
+
 // clock
 eq(/^\d{2}:\d{2}:\d{2}$/.test(fmtClock(Date.now())), true, "clock HH:MM:SS");
 
@@ -83,27 +93,38 @@ const data = {
 	aborted: false,
 	nestedSent: 0,
 	nestedRecv: 0,
+	nestedCost: 0,
+	cost: 0.0043,
+	costBilled: false,
 	tpsMode: "response",
 };
 eq(
 	statusLine(data, ALL_FIELDS),
-	"◷ 14:33:05 · ⏱ 1m20s · TTFT 830ms · ⚡ 43 tok/s · ↑ 12.3k · ↓ 3.4k · cache 88%",
+	"◷ 14:33:05 · ⏱ 1m20s · TTFT 830ms · ⚡ 43 tok/s · ↑ 12.3k · ↓ 3.4k · cache 88% · ≈$0.0043",
 	"default status line",
 );
 eq(
+	statusLine({ ...data, cost: 0.05, costBilled: true }, ALL_FIELDS).endsWith("· $0.05"),
+	true,
+	"provider-billed cost drops the estimate mark",
+);
+eq(statusParts(data, ["cost"])[0].glue, true, "cost icon glues to the number");
+eq(statusParts({ ...data, cost: null }, ["cost"]).length, 0, "cost omitted without pricing data");
+eq(statusLine({ ...data, cost: null }, ALL_FIELDS).includes("$"), false, "unpriced model shows no cost");
+eq(
 	ALL_FIELDS.join(","),
-	"finished,duration,ttft,tps,sent,recv,cache",
-	"default order is finished, duration, ttft, tps, sent, recv, cache",
+	"finished,duration,ttft,tps,sent,recv,cache,cost",
+	"default order is finished, duration, ttft, tps, sent, recv, cache, cost",
 );
 eq(statusLine(data, ["cache", "finished"]), "cache 88% · ◷ 14:33:05", "custom order");
 eq(statusParts(data, ["sent", "recv"]).every((p) => p.label === ""), true, "sent/recv are icon only");
 eq(statusParts(data, ["tps"])[0].label, "tok/s", "tps keeps its unit");
 
 // order + visibility resolution
-eq(resolveFields(["cache", "ttft"], []).join(","), "cache,ttft,finished,duration,tps,sent,recv", "unlisted fields append in default order");
-eq(resolveFields(ALL_FIELDS, ["ttft", "cache"]).join(","), "finished,duration,tps,sent,recv", "hidden drops without reordering");
-eq(resolveFields(["duration", "duration"], []).join(","), "duration,finished,ttft,tps,sent,recv,cache", "duplicate order entries collapse");
-eq(resolveFields([], ["tps"]).join(","), "finished,duration,ttft,sent,recv,cache", "hidden with default order");
+eq(resolveFields(["cache", "ttft"], []).join(","), "cache,ttft,finished,duration,tps,sent,recv,cost", "unlisted fields append in default order");
+eq(resolveFields(ALL_FIELDS, ["ttft", "cache"]).join(","), "finished,duration,tps,sent,recv,cost", "hidden drops without reordering");
+eq(resolveFields(["duration", "duration"], []).join(","), "duration,finished,ttft,tps,sent,recv,cache,cost", "duplicate order entries collapse");
+eq(resolveFields([], ["tps"]).join(","), "finished,duration,ttft,sent,recv,cache,cost", "hidden with default order");
 eq(resolveFields(ALL_FIELDS, ALL_FIELDS).length, 0, "hiding everything yields an empty line");
 eq(statusParts(data, ["tps", "sent"]).length, 2, "field subset");
 eq(statusLine({ ...data, aborted: true }, ["tps"]), "aborted · ⚡ 43 tok/s", "aborted prefix");
@@ -114,7 +135,7 @@ eq(
 );
 eq(statusDetail({ ...data, cacheWrite: 2100 }).includes("cache w 2.1k"), true, "detail cache write");
 eq(statusDetail({ ...data, models: ["m1", "m2"] }).includes("m1, m2"), true, "detail lists models");
-eq(statusDetail({ ...data, nestedSent: 1200, nestedRecv: 300 }).includes("nested ↑1.2k ↓300"), true, "detail nested");
+eq(statusDetail({ ...data, nestedSent: 1200, nestedRecv: 300, nestedCost: 0.012 }).includes("nested ↑1.2k ↓300 ≈$0.012"), true, "detail nested");
 
 if (failures > 0) {
 	console.log(`\n${failures} failing assertion(s)`);

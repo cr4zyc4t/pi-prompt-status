@@ -22,6 +22,7 @@ import * as path from "node:path";
 import {
 	ALL_FIELDS,
 	fmtCount,
+	fmtCost,
 	fmtDuration,
 	fmtRate,
 	isStatusField,
@@ -86,6 +87,13 @@ interface Open {
 	nestedOutput: number;
 	nestedCacheRead: number;
 	nestedCacheWrite: number;
+	/** Sum of `usage.cost.total` over the main model's requests. */
+	cost: number;
+	/** True once any request carried a `cost` object, i.e. the model has pricing data. */
+	costSeen: boolean;
+	/** True when a request's total was a catalog estimate rather than provider-billed. */
+	costEstimated: boolean;
+	nestedCost: number;
 	requests: number;
 	models: string[];
 }
@@ -104,6 +112,10 @@ function newOpen(): Open {
 		nestedOutput: 0,
 		nestedCacheRead: 0,
 		nestedCacheWrite: 0,
+		cost: 0,
+		costSeen: false,
+		costEstimated: false,
+		nestedCost: 0,
 		requests: 0,
 		models: [],
 	};
@@ -247,6 +259,9 @@ export default function (pi: ExtensionAPI) {
 			aborted,
 			nestedSent,
 			nestedRecv: state.nestedOutput,
+			nestedCost: state.nestedCost,
+			cost: state.costSeen ? state.cost + (config.includeNestedUsage ? state.nestedCost : 0) : null,
+			costBilled: state.costSeen ? !state.costEstimated : null,
 			tpsMode: config.tpsMode,
 		};
 
@@ -295,6 +310,12 @@ export default function (pi: ExtensionAPI) {
 			state.output += usage.output || 0;
 			state.cacheRead += usage.cacheRead || 0;
 			state.cacheWrite += usage.cacheWrite || 0;
+			const cost = usage.cost;
+			if (cost) {
+				state.costSeen = true;
+				state.cost += cost.total || 0;
+				if (cost.totalFromProvider !== true) state.costEstimated = true;
+			}
 		}
 		state.requests += 1;
 		const model = event.message.responseModel || event.message.model;
@@ -309,6 +330,7 @@ export default function (pi: ExtensionAPI) {
 		open.nestedOutput += usage.output || 0;
 		open.nestedCacheRead += usage.cacheRead || 0;
 		open.nestedCacheWrite += usage.cacheWrite || 0;
+		if (usage.cost) open.nestedCost += usage.cost.total || 0;
 	});
 
 	// Final and notification-only: no retry, compaction, or queued continuation is left.
@@ -330,7 +352,7 @@ export default function (pi: ExtensionAPI) {
 		const line = parts
 			.map((part) => {
 				const value = theme.fg("muted", part.value);
-				return `${theme.fg("dim", part.icon)} ${value}${part.label ? ` ${theme.fg("dim", part.label)}` : ""}`;
+				return `${theme.fg("dim", part.icon)}${part.glue ? "" : " "}${value}${part.label ? ` ${theme.fg("dim", part.label)}` : ""}`;
 			})
 			.join(dot);
 		const head = data.aborted ? `${theme.fg("warning", "aborted")}${dot}${line}` : line;
@@ -477,11 +499,14 @@ export default function (pi: ExtensionAPI) {
 					const sent = sum((d) => d.sent);
 					const cacheRead = sum((d) => d.cacheRead);
 					const prompt = sum((d) => d.input + d.cacheRead + d.cacheWrite);
+					const cost = sum((d) => d.cost ?? 0);
+					const priced = rows.some((d) => typeof d.cost === "number");
+					const billed = priced && rows.every((d) => d.costBilled === true);
 					ctx.ui.notify(
 						[
 							`responses ${rows.length} · wall ${fmtDuration(wall)} · gen ${fmtDuration(gen)}`,
 							`avg ${fmtRate((recv / Math.max(1, wall)) * 1000)} tok/s · cache ${prompt > 0 ? `${Math.round((cacheRead / prompt) * 100)}%` : "n/a"}`,
-							`↑ ${fmtCount(sent)} · ↓ ${fmtCount(recv)}`,
+							`↑ ${fmtCount(sent)} · ↓ ${fmtCount(recv)}${priced ? ` · ${billed ? "$" : "≈$"}${fmtCost(cost)}` : ""}`,
 						].join("\n"),
 						"info",
 					);
