@@ -1,0 +1,27 @@
+{
+  "name": "pi-prompt-status",
+  "version": "0.1.0",
+  "description": "Per-response status line in pi: duration, finish time, TTFT, tokens/s, sent and received tokens, cache hit rate",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi", "extension", "status", "tps", "ttft"],
+  "pi": {
+    "extensions": ["./extensions/prompt-status.ts"]
+  },
+  "files": ["extensions", "src", "README.md", "CHANGELOG.md"],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node test/format.test.mjs",
+    "test:rpc": "python3 test/rpc-smoke.py"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.5.2",
+    "@earendil-works/pi-tui": "*",
+    "@types/node": "*",
+    "typescript": "*"
+  }
+}

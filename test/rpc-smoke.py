@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""End-to-end smoke test for pi-prompt-status, driven over pi's RPC mode.
+
+Requires: a pi build on PATH, a scratch PI_CODING_AGENT_DIR whose auth.json points at a
+working provider, and a model that does not cost anything.
+
+    A=/tmp/pstatus-agent W=/tmp/pstatus-work MODEL=openrouter/...:free
+    mkdir -p "$A" "$W"
+    ln -s ~/.pi/agent/auth.json "$A/auth.json"
+    printf '{}\n' > "$A/prompt-status.json"
+    cd "$W" && PI_CODING_AGENT_DIR="$A" python3 test/rpc-smoke.py
+
+Checks: a response aggregates every provider request it made, a later response shows a cache
+hit, an aborted run still writes a status with aborted=true, and the command verbs work.
+"""
+import json
+import os
+import queue
+import subprocess
+import sys
+import threading
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+EXT = os.path.join(os.path.dirname(HERE), "extensions", "prompt-status.ts")
+MODEL = os.environ.get("MODEL", "openrouter/nvidia/nemotron-3.5-lightning:free")
+
+if not os.environ.get("PI_CODING_AGENT_DIR"):
+    sys.exit("set PI_CODING_AGENT_DIR to a scratch agent dir (see docstring)")
+
+proc = subprocess.Popen(
+    ["pi", "-e", EXT, "--model", MODEL, "--thinking", "off", "--mode", "rpc"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    bufsize=1,
+)
+
+events: queue.Queue = queue.Queue()
+
+
+def pump(pipe, tag):
+    for line in pipe:
+        events.put((tag, line.rstrip("\n")))
+
+
+threading.Thread(target=pump, args=(proc.stdout, "out"), daemon=True).start()
+threading.Thread(target=pump, args=(proc.stderr, "err"), daemon=True).start()
+
+failures = 0
+seen = {"tools": 0}
+
+
+def send(obj):
+    proc.stdin.write(json.dumps(obj) + "\n")
+    proc.stdin.flush()
+
+
+def wait_for(predicate, timeout, label):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            tag, line = events.get(timeout=1)
+        except queue.Empty:
+            continue
+        if tag == "err":
+            if line.strip():
+                print(f"  [stderr] {line}")
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        match = predicate(event)
+        if match:
+            return match
+    print(f"  FAIL timeout waiting for {label}")
+    return None
+
+
+def check(condition, label):
+    global failures
+    print(f"  {'ok  ' if condition else 'FAIL'} {label}")
+    if not condition:
+        failures += 1
+
+
+def status_entry(event):
+    if event.get("type") == "tool_execution_start":
+        seen["tools"] += 1
+        return None
+    if event.get("type") != "entry_appended":
+        return None
+    entry = event.get("entry", {})
+    return entry["data"] if entry.get("customType") == "prompt-status" else None
+
+
+def notification(want=None):
+    def predicate(event):
+        if event.get("type") != "extension_ui_request" or event.get("method") != "notify":
+            return None
+        message = event.get("message", "")
+        return None if want and want not in message else message
+
+    return predicate
+
+
+print(f"model: {MODEL}\n")
+
+print("1. tool-using response aggregates every request it made")
+send({"id": "p1", "type": "prompt", "message": "Run the bash command 'echo hello' and tell me what it printed."})
+first = wait_for(status_entry, 240, "status entry")
+if first:
+    print(f"   {json.dumps(first)}")
+# A model that skipped the tool call legitimately produces one request.
+expected = 2 if seen["tools"] else 1
+check(first["requests"] >= expected, f"requests >= {expected} (tool executions seen: {seen['tools']})")
+check(first["sent"] > 0 and first["recv"] > 0, "sent and recv populated")
+check(first["ttftMs"] is not None and first["ttftMs"] < first["durationMs"], "TTFT inside the response")
+check(not first["aborted"], "not aborted")
+
+print("\n2. a later response shows a cache hit")
+send({"id": "p2", "type": "prompt", "message": "Now run 'echo world' and report both outputs."})
+second = wait_for(status_entry, 240, "second status entry")
+if second:
+    print(f"   cache={round(second['cacheHitPct'] or 0)}% requests={second['requests']}")
+check(second["cacheHitPct"] is not None and second["cacheHitPct"] > 0, "cache hit > 0")
+
+print("\n3. aborted run still writes a status")
+send({"id": "p3", "type": "prompt", "message": "Write a 600-word essay about prompt caching, step by step."})
+time.sleep(6)
+send({"id": "a1", "type": "abort"})
+aborted = wait_for(status_entry, 90, "aborted status entry")
+if aborted:
+    print(f"   aborted={aborted['aborted']} requests={aborted['requests']}")
+check(aborted["aborted"] is True, "aborted=true")
+
+print("\n4. /prompt-status commands")
+send({"id": "c1", "type": "prompt", "message": "/prompt-status stats"})
+stats = wait_for(notification("responses"), 30, "stats output")
+check(bool(stats), f"stats reported: {stats!r}")
+send({"id": "c2", "type": "prompt", "message": "/prompt-status mode generation"})
+mode = wait_for(notification("streaming time"), 30, "mode output")
+check(bool(mode), "mode switch acknowledged")
+send({"id": "c3", "type": "prompt", "message": "/prompt-status fields duration,finished,cache"})
+fields = wait_for(notification("fields ="), 30, "fields output")
+check(bool(fields), "field subset acknowledged")
+
+send({"id": "q", "type": "get_state"})
+wait_for(lambda e: e.get("type") == "response" and e.get("command") == "get_state", 30, "state")
+
+proc.stdin.close()
+try:
+    proc.wait(timeout=30)
+except subprocess.TimeoutExpired:
+    proc.kill()
+
+print(f"\n{'FAILED: ' + str(failures) + ' check(s)' if failures else 'all checks passed'}")
+sys.exit(1 if failures else 0)
