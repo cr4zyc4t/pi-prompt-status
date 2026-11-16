@@ -6,7 +6,7 @@
   session entry when the agent settles.
 - Fields: finish time (`HH:MM:SS`), response duration, TTFT, tokens/s, sent tokens, received
   tokens, cache hit rate, and cost, each formatted in human-friendly units; `↑`/`↓` carry no label.
-- Cost shows the provider-billed figure as `$0.0043` and pi's catalog estimate as `≈$0.0043`, and hides itself
+- Cost shows the provider-billed figure as `$0.0043` and pi's catalog estimate as `~$0.0043`, and hides itself
   for models without pricing data and for totals that are zero.
 - Order and per-field visibility are configurable (`fields` + `hidden` in config, or
   `/prompt-status order|fields|show|hide`).

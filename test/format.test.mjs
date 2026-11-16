@@ -95,19 +95,25 @@ const data = {
 	nestedSent: 0,
 	nestedRecv: 0,
 	nestedCost: 0,
+	nestedCostBilled: null,
 	cost: 0.0043,
 	costBilled: false,
 	tpsMode: "response",
 };
 eq(
 	statusLine(data, ALL_FIELDS),
-	"◷ 14:33:05 · ⏱ 1m20s · TTFT 830ms · ⚡ 43 tok/s · ↑ 12.3k · ↓ 3.4k · cache 88% · ≈$0.0043",
+	"◷ 14:33:05 · ⏱ 1m20s · TTFT 830ms · ⚡ 43 tok/s · ↑ 12.3k · ↓ 3.4k · cache 88% · ~$0.0043",
 	"default status line",
+);
+eq(
+	statusParts(data, ["cost"])[0].icon,
+	"~$",
+	"catalog estimate is marked ~",
 );
 eq(
 	statusLine({ ...data, cost: 0.05, costBilled: true }, ALL_FIELDS).endsWith("· $0.05"),
 	true,
-	"provider-billed cost drops the estimate mark",
+	"provider-billed cost drops the ~ mark",
 );
 eq(statusParts(data, ["cost"])[0].glue, true, "cost icon glues to the number");
 eq(statusParts({ ...data, cost: null }, ["cost"]).length, 0, "cost omitted without pricing data");
@@ -142,7 +148,12 @@ eq(
 );
 eq(statusDetail({ ...data, cacheWrite: 2100 }).includes("cache w 2.1k"), true, "detail cache write");
 eq(statusDetail({ ...data, models: ["m1", "m2"] }).includes("m1, m2"), true, "detail lists models");
-eq(statusDetail({ ...data, nestedSent: 1200, nestedRecv: 300, nestedCost: 0.012 }).includes("nested ↑1.2k ↓300 ≈$0.012"), true, "detail nested");
+eq(statusDetail({ ...data, nestedSent: 1200, nestedRecv: 300, nestedCost: 0.012 }).includes("nested ↑1.2k ↓300 ~$0.012"), true, "detail nested");
+eq(
+	statusDetail({ ...data, nestedSent: 1200, nestedRecv: 300, nestedCost: 0.012, nestedCostBilled: true }).includes("nested ↑1.2k ↓300 $0.012"),
+	true,
+	"detail nested billed drops the ~ mark",
+);
 
 if (failures > 0) {
 	console.log(`\n${failures} failing assertion(s)`);

@@ -95,6 +95,8 @@ interface Open {
 	/** True when a request's total was a catalog estimate rather than provider-billed. */
 	costEstimated: boolean;
 	nestedCost: number;
+	nestedCostSeen: boolean;
+	nestedCostEstimated: boolean;
 	requests: number;
 	models: string[];
 }
@@ -117,6 +119,8 @@ function newOpen(): Open {
 		costSeen: false,
 		costEstimated: false,
 		nestedCost: 0,
+		nestedCostSeen: false,
+		nestedCostEstimated: false,
 		requests: 0,
 		models: [],
 	};
@@ -261,6 +265,7 @@ export default function (pi: ExtensionAPI) {
 			nestedSent,
 			nestedRecv: state.nestedOutput,
 			nestedCost: state.nestedCost,
+			nestedCostBilled: state.nestedCostSeen ? !state.nestedCostEstimated : null,
 			cost: state.costSeen ? state.cost + (config.includeNestedUsage ? state.nestedCost : 0) : null,
 			costBilled: state.costSeen ? !state.costEstimated : null,
 			tpsMode: config.tpsMode,
@@ -331,7 +336,11 @@ export default function (pi: ExtensionAPI) {
 		open.nestedOutput += usage.output || 0;
 		open.nestedCacheRead += usage.cacheRead || 0;
 		open.nestedCacheWrite += usage.cacheWrite || 0;
-		if (usage.cost) open.nestedCost += usage.cost.total || 0;
+		if (usage.cost) {
+			open.nestedCost += usage.cost.total || 0;
+			open.nestedCostSeen = true;
+			if (usage.cost.totalFromProvider !== true) open.nestedCostEstimated = true;
+		}
 	});
 
 	// Final and notification-only: no retry, compaction, or queued continuation is left.
@@ -507,7 +516,7 @@ export default function (pi: ExtensionAPI) {
 						[
 							`responses ${rows.length} · wall ${fmtDuration(wall)} · gen ${fmtDuration(gen)}`,
 							`avg ${fmtRate((recv / Math.max(1, wall)) * 1000)} tok/s · cache ${prompt > 0 ? `${Math.round((cacheRead / prompt) * 100)}%` : "n/a"}`,
-							`↑ ${fmtCount(sent)} · ↓ ${fmtCount(recv)}${hasCost(cost) ? ` · ${billed ? "$" : "≈$"}${fmtCost(cost)}` : ""}`,
+							`↑ ${fmtCount(sent)} · ↓ ${fmtCount(recv)}${hasCost(cost) ? ` · ${billed ? "$" : "~$"}${fmtCost(cost)}` : ""}`,
 						].join("\n"),
 						"info",
 					);

@@ -59,9 +59,11 @@ export interface PromptStatusData {
 	nestedSent: number;
 	nestedRecv: number;
 	nestedCost: number;
+	/** Recorded for the expanded line: nested cost was provider-billed rather than estimated. */
+	nestedCostBilled: boolean | null;
 	/** Sum of `usage.cost.total`, or null when no request reported cost data. */
 	cost: number | null;
-	/** True when every cost figure was billed by the provider; false when any part is a catalog estimate. */
+	/** True when every cost figure was billed by the provider; false or null when any part is a catalog estimate. */
 	costBilled: boolean | null;
 	tpsMode: TpsMode;
 }
@@ -203,7 +205,8 @@ export function statusParts(data: PromptStatusData, fields: StatusField[]): Stat
 				// No pricing data, or a total that rounds to zero: show nothing rather than "$0".
 				if (!hasCost(data.cost)) break;
 				parts.push({
-					icon: data.costBilled === true ? "$" : "≈$",
+					// `~$` marks pi's catalog estimate, `$` a figure the provider billed.
+					icon: data.costBilled === true ? "$" : "~$",
 					label,
 					value: fmtCost(data.cost ?? 0),
 					glue: true,
@@ -238,7 +241,7 @@ export function statusDetail(data: PromptStatusData): string {
 	if (data.cacheWrite > 0) bits.push(`cache w ${fmtCount(data.cacheWrite)}`);
 	if (data.nestedSent > 0 || data.nestedRecv > 0) {
 		const nested = `nested ↑${fmtCount(data.nestedSent)} ↓${fmtCount(data.nestedRecv)}`;
-		bits.push(data.nestedCost > 0 ? `${nested} ≈$${fmtCost(data.nestedCost)}` : nested);
+		bits.push(data.nestedCost > 0 ? `${nested} ${data.nestedCostBilled === true ? "$" : "~$"}${fmtCost(data.nestedCost)}` : nested);
 	}
 	if (data.models.length > 0) bits.push(data.models.join(", "));
 	return bits.join(" · ");
