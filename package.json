@@ -2,6 +2,7 @@
   "name": "pi-prompt-status",
   "version": "0.1.0",
   "description": "Per-response status line in pi: duration, finish time, TTFT, tokens/s, sent and received tokens, cache hit rate",
+  "author": "ToanVQ",
   "type": "module",
   "license": "MIT",
   "keywords": ["pi-package", "pi", "extension", "status", "tps", "ttft"],
@@ -11,7 +12,7 @@
   "files": ["extensions", "src", "README.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node test/format.test.mjs",
+    "test": "node --test test/format.test.mjs test/extension.test.mjs",
     "test:rpc": "python3 test/rpc-smoke.py"
   },
   "peerDependencies": {

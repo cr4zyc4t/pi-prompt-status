@@ -165,6 +165,17 @@ function parseFieldArgs(words: string[]): { fields: StatusField[]; bad: string[]
 	return { fields, bad };
 }
 
+/** Every `prompt-status` entry recorded in this session, oldest first. */
+function storedRows(ctx: Pick<ExtensionContext, "sessionManager">): PromptStatusData[] {
+	const rows: PromptStatusData[] = [];
+	for (const entry of ctx.sessionManager.getEntries()) {
+		if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
+		const data = entry.data as PromptStatusData | undefined;
+		if (data && data.v === 1) rows.push(data);
+	}
+	return rows;
+}
+
 function parseConfig(raw: string): Config {
 	const parsed: unknown = JSON.parse(raw);
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -217,6 +228,18 @@ export default function (pi: ExtensionAPI) {
 	function visible(): StatusField[] {
 		return resolveFields(config.fields, config.hidden);
 	}
+	/** Newest status this session knows about, including entries recorded before a /resume. */
+	function latestData(ctx: Pick<ExtensionContext, "sessionManager">): PromptStatusData | null {
+		if (lastData) return lastData;
+		const rows = storedRows(ctx);
+		return rows.length > 0 ? rows[rows.length - 1]! : null;
+	}
+
+	/** The status line for the newest entry, or null when the session has none. */
+	function lastLine(ctx: Pick<ExtensionContext, "sessionManager">): string | null {
+		const data = latestData(ctx);
+		return data ? statusLine(data, visible(), " ") : null;
+	}
 
 	function closeGenerationWindow(state: Open): void {
 		if (state.windowOpenMono === null) return;
@@ -241,11 +264,12 @@ export default function (pi: ExtensionAPI) {
 
 		const promptTotal = state.input + state.cacheRead + state.cacheWrite;
 		const nestedSent = state.nestedInput + state.nestedCacheRead + state.nestedCacheWrite;
+		const nestedForSent = config.sentIncludesCache ? nestedSent : state.nestedInput;
 		const sent =
 			(config.sentIncludesCache ? promptTotal : state.input) +
-			(config.includeNestedUsage ? nestedSent : 0);
+			(config.includeNestedUsage ? nestedForSent : 0);
 		const recv = state.output + (config.includeNestedUsage ? state.nestedOutput : 0);
-		const measuredMs = config.tpsMode === "generation" && state.generationMs > 250 ? state.generationMs : durationMs;
+		const measuredMs = config.tpsMode === "generation" && state.generationMs > 0 ? state.generationMs : durationMs;
 		const data: PromptStatusData = {
 			v: 1,
 			finishedAt: Date.now(),
@@ -267,7 +291,9 @@ export default function (pi: ExtensionAPI) {
 			nestedCost: state.nestedCost,
 			nestedCostBilled: state.nestedCostSeen ? !state.nestedCostEstimated : null,
 			cost: state.costSeen ? state.cost + (config.includeNestedUsage ? state.nestedCost : 0) : null,
-			costBilled: state.costSeen ? !state.costEstimated : null,
+			costBilled: state.costSeen
+				? !(state.costEstimated || (config.includeNestedUsage && state.nestedCostSeen && state.nestedCostEstimated))
+				: null,
 			tpsMode: config.tpsMode,
 		};
 
@@ -422,7 +448,7 @@ export default function (pi: ExtensionAPI) {
 				case "order": {
 					const { fields, bad } = parseFieldArgs(rest);
 					if (fields.length === 0) {
-						ctx.ui.notify(`prompt-status: order takes fields from ${ALL_FIELDS.join(", ")}`, "error");
+						ctx.ui.notify(`prompt-status: order takes fields from ${ALL_FIELDS.join(", ")}${bad.length ? ` · unknown: ${bad.join(", ")}` : ""}`, "error");
 						return;
 					}
 					config.fields = resolveFields(fields, []);
@@ -436,7 +462,7 @@ export default function (pi: ExtensionAPI) {
 				case "fields": {
 					const { fields, bad } = parseFieldArgs(rest);
 					if (fields.length === 0) {
-						ctx.ui.notify(`prompt-status: fields takes a list from ${ALL_FIELDS.join(", ")}`, "error");
+						ctx.ui.notify(`prompt-status: fields takes a list from ${ALL_FIELDS.join(", ")}${bad.length ? ` · unknown: ${bad.join(", ")}` : ""}`, "error");
 						return;
 					}
 					// Render exactly these, in this order; everything else is hidden.
@@ -453,7 +479,7 @@ export default function (pi: ExtensionAPI) {
 				case "hide": {
 					const { fields, bad } = parseFieldArgs(rest);
 					if (fields.length === 0) {
-						ctx.ui.notify(`prompt-status: ${verb} takes fields from ${ALL_FIELDS.join(", ")}`, "error");
+						ctx.ui.notify(`prompt-status: ${verb} takes fields from ${ALL_FIELDS.join(", ")}${bad.length ? ` · unknown: ${bad.join(", ")}` : ""}`, "error");
 						return;
 					}
 					config.fields = resolveFields(config.fields, []);
@@ -470,6 +496,7 @@ export default function (pi: ExtensionAPI) {
 				}
 				case "footer":
 					toggle("footerStatus");
+					if (!config.footerStatus && ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
 					return;
 				case "nested":
 					toggle("includeNestedUsage");
@@ -488,16 +515,13 @@ export default function (pi: ExtensionAPI) {
 					saveConfig(ctx);
 					ctx.ui.notify(`prompt-status: reset to defaults`, "info");
 					return;
-				case "last":
-					ctx.ui.notify(lastData ? statusLine(lastData, visible(), " ") : "prompt-status: no response recorded yet", "info");
+				case "last": {
+					const line = lastLine(ctx);
+					ctx.ui.notify(line ?? "prompt-status: no response recorded yet", "info");
 					return;
+				}
 				case "stats": {
-					const rows: PromptStatusData[] = [];
-					for (const entry of ctx.sessionManager.getEntries()) {
-						if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
-						const data = entry.data as PromptStatusData | undefined;
-						if (data && data.v === 1) rows.push(data);
-					}
+					const rows = storedRows(ctx);
 					if (rows.length === 0) {
 						ctx.ui.notify("prompt-status: no responses recorded in this session", "info");
 						return;
@@ -522,18 +546,21 @@ export default function (pi: ExtensionAPI) {
 					);
 					return;
 				}
-				default:
+				default: {
+					const last = lastLine(ctx);
 					ctx.ui.notify(
 						[
 							`prompt-status ${config.enabled ? "on" : "off"} · tokens/s ${config.tpsMode} · footer ${config.footerStatus ? "on" : "off"}`,
 							`order: ${resolveFields(config.fields, []).join(", ")}`,
 							`hidden: ${config.hidden.length ? config.hidden.join(", ") : "(none)"}`,
 							`sent ${config.sentIncludesCache ? "includes" : "excludes"} cache · nested ${config.includeNestedUsage ? "included" : "excluded"} · aborted ${config.showAborted ? "shown" : "hidden"}`,
-							lastData ? `last: ${statusLine(lastData, visible(), " ")}` : "last: none yet",
+							last ? `last: ${last}` : "last: none yet",
 							`/prompt-status on|off|order|fields|show|hide|mode|footer|nested|cache|aborted|last|stats|path|reset`,
 						].join("\n"),
 						"info",
 					);
+					return;
+				}
 			}
 		},
 	});

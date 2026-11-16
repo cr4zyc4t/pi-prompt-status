@@ -243,7 +243,8 @@ export function statusDetail(data: PromptStatusData): string {
 		const nested = `nested ↑${fmtCount(data.nestedSent)} ↓${fmtCount(data.nestedRecv)}`;
 		bits.push(data.nestedCost > 0 ? `${nested} ${data.nestedCostBilled === true ? "$" : "~$"}${fmtCost(data.nestedCost)}` : nested);
 	}
-	if (data.models.length > 0) bits.push(data.models.join(", "));
+	const models = Array.isArray(data.models) ? data.models.filter((model) => typeof model === "string") : [];
+	if (models.length > 0) bits.push(models.join(", "));
 	return bits.join(" · ");
 }
 

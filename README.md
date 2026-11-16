@@ -36,11 +36,13 @@ req 4 · gen 24s · gen-only 142 tok/s · uncached ↑1.5k · cache w 2.1k · gp
 
 ## Install
 
+Run these from the package checkout:
+
 ```bash
-pi install npm:pi-prompt-status        # once published
-pi install ./pi-prompt-status          # from a local checkout (personal scope)
-pi install -l ./pi-prompt-status       # project scope
-pi -e ./pi-prompt-status/extensions/prompt-status.ts   # try once, nothing written to settings
+pi install npm:pi-prompt-status      # once published
+pi install .                         # local checkout, personal scope
+pi install -l .                      # project scope
+pi -e ./extensions/prompt-status.ts  # try once, nothing written to settings
 ```
 
 Then `/reload` if pi is already running.
@@ -57,6 +59,11 @@ The status is a `prompt-status` **custom session entry** (`pi.appendEntry`) with
 ## Configuration
 
 `~/.pi/agent/prompt-status.json` (honors `PI_CODING_AGENT_DIR`). Every key is optional; unknown keys are ignored.
+
+The file is not created by installing or running the extension: defaults apply until a `/prompt-status` setting command
+writes it, and `/prompt-status path` prints where it would be. Invalid JSON is reported once and the defaults are used,
+so a typo cannot silence the status line. Settings live per process, so with two pi sessions open the one that saves
+last wins.
 
 ```json
 {
@@ -75,11 +82,11 @@ The status is a `prompt-status` **custom session entry** (`pi.appendEntry`) with
 | Key | Default | Effect |
 | --- | --- | --- |
 | `enabled` | `true` | Write status entries at all. |
-| `fields` | the seven keys in the default order above | Render order. Anything left out is appended in default order, so a partial list is legal. |
+| `fields` | the eight keys in the default order above | Render order. Anything left out is appended in default order, so a partial list is legal. |
 | `hidden` | `[]` | Fields kept out of the line. They stay listed in `fields`, so re-showing them lands back in position. |
 | `tpsMode` | `"response"` | `"response"`: `recv / duration`. `"generation"`: `recv / Σ streaming windows`, which excludes tool execution and inter-request gaps. |
 | `sentIncludesCache` | `true` | Include cache read/write in `sent`. Cache hit % always uses all prompt tokens either way. |
-| `includeNestedUsage` | `false` | Add usage that tools report for nested model work (subagents, classifier calls) to `sent`/`recv`. Always shown in the expanded line. |
+| `includeNestedUsage` | `false` | Add nested usage to `sent`/`recv`, counted from what a tool returns in its `tool_result` `usage` field — the channel pi documents for nested LLM calls. A tool that reports child usage only in `details` contributes nothing here. |
 | `showAborted` | `true` | Still write a status for runs aborted with Escape. |
 | `footerStatus` | `false` | Also mirror the latest status into pi's footer until the next prompt. |
 | `nonInteractive` | `false` | Also write entries in print/JSON mode, where there is no transcript to render into. |
@@ -95,16 +102,16 @@ The status is a `prompt-status` **custom session entry** (`pi.appendEntry`) with
 | `fields <a,b,c>` | Render exactly these, in this order — everything else becomes hidden. |
 | `show <a,b>` / `hide <a,b>` | Toggle fields without touching the order. |
 | `mode response\|generation` | Choose the tokens/s denominator. |
-| `footer on\|off` | Footer mirror. |
+| `footer on\|off` | Footer mirror. Turning it off also clears the line it left in the footer. |
 | `nested on\|off` | Include nested tool usage in `sent`/`recv`. |
-| `cache on\|off` | Whether `sent` includes cache tokens. |
+| `cache on\|off` | Whether `sent` includes cache tokens, for the model's own requests and for nested usage. |
 | `aborted on\|off` | Write statuses for aborted runs. |
-| `last` | Print the last status again. |
+| `last` | Print the newest status again — read from the session entries, so it still works after `/reload` or `/resume`. |
 | `stats` | Session totals: responses, wall time, streaming time, avg tok/s, avg cache hit, total sent/received, and cost. |
-| `path` / `reset` | Show or reset the config file. |
+| `path` / `reset` | Print the config path / write the defaults to it. |
 
-Field arguments accept commas or spaces (`hide ttft cache`), and unknown names are reported instead of silently
-dropped. Hiding every field disables line rendering entirely.
+Field arguments accept commas or spaces (`hide ttft cache`). A name that is not a field is named back to you instead
+of being silently dropped. Hiding every field disables line rendering entirely.
 
 ## Measurement notes
 
@@ -121,15 +128,16 @@ dropped. Hiding every field disables line rendering entirely.
 - Nested tool usage (subagents, classifier calls) keeps its own cost in the expanded line. It enters `cost` only when
   `includeNestedUsage` is on.
 - A settle with no assistant request produces no entry, so idle `agent_settled` noise stays out of the transcript.
-- Not attributed: compaction and branch-summary token spend (they are not assistant messages), and anything a nested
-  agent spent unless `includeNestedUsage` is on.
+- Not attributed: compaction and branch-summary token spend (they are not assistant messages), and nested agent spend
+  unless `includeNestedUsage` is on and the tool reports that usage in its `tool_result` `usage` field. That is pi's
+  documented accounting channel, so a tool that reports child usage elsewhere is invisible to pi's own totals too.
 
 ## Development
 
 ```bash
 npm run typecheck                 # tsc --noEmit against the installed pi types
-npm test                          # pure formatter tests, node >= 23.6 (native type stripping)
-python3 test/rpc-smoke.py         # drives a real pi process over RPC mode
+npm test                          # formatter tests + extension tests over a fake pi API, node >= 23.6
+python3 test/rpc-smoke.py         # drives a real pi process over RPC mode (exit 2 = skipped: no auth, or the provider rate-limited the run)
 ```
 
 `test/rpc-smoke.py` needs a writable `PI_CODING_AGENT_DIR`; point it at a scratch dir with `auth.json` linked in so a
@@ -141,6 +149,8 @@ test run cannot touch your real config or session list.
 extensions/prompt-status.ts   the extension: events, aggregation, entry renderer, command
 src/format.ts                 pure formatters (duration, counts, rates, percentages, line assembly)
 test/format.test.mjs          formatter assertions
+test/extension.test.mjs       the real extension driven by a fake ExtensionAPI: windows,
+                              aggregation, renderer, every command verb, config
 test/rpc-smoke.py             end-to-end harness over pi's RPC mode
 ```
 
