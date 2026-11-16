@@ -17,3 +17,4 @@
 - `/prompt-status` with `on|off`, `order`, `fields`, `show`, `hide`, `mode`, `footer`, `nested`,
   `cache`, `aborted`, `last`, `stats`, `path`, `reset`; settings persist to
   `~/.pi/agent/prompt-status.json`.
+- MIT licensed (`LICENSE`).

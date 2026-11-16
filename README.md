@@ -144,4 +144,6 @@ test/format.test.mjs          formatter assertions
 test/rpc-smoke.py             end-to-end harness over pi's RPC mode
 ```
 
-MIT
+## License
+
+MIT — see [LICENSE](LICENSE).
