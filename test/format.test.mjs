@@ -10,6 +10,7 @@ import {
 	fmtPct,
 	fmtRate,
 	fmtTtft,
+	resolveFields,
 	statusDetail,
 	statusLine,
 	statusParts,
@@ -86,9 +87,24 @@ const data = {
 };
 eq(
 	statusLine(data, ALL_FIELDS),
-	"⏱ 1m20s · ◷ 14:33:05 · TTFT 830ms · ⚡ 43 tok/s · ↑ 12.3k sent · ↓ 3.4k recv · cache 88%",
-	"status line",
+	"◷ 14:33:05 · ⏱ 1m20s · TTFT 830ms · ⚡ 43 tok/s · ↑ 12.3k · ↓ 3.4k · cache 88%",
+	"default status line",
 );
+eq(
+	ALL_FIELDS.join(","),
+	"finished,duration,ttft,tps,sent,recv,cache",
+	"default order is finished, duration, ttft, tps, sent, recv, cache",
+);
+eq(statusLine(data, ["cache", "finished"]), "cache 88% · ◷ 14:33:05", "custom order");
+eq(statusParts(data, ["sent", "recv"]).every((p) => p.label === ""), true, "sent/recv are icon only");
+eq(statusParts(data, ["tps"])[0].label, "tok/s", "tps keeps its unit");
+
+// order + visibility resolution
+eq(resolveFields(["cache", "ttft"], []).join(","), "cache,ttft,finished,duration,tps,sent,recv", "unlisted fields append in default order");
+eq(resolveFields(ALL_FIELDS, ["ttft", "cache"]).join(","), "finished,duration,tps,sent,recv", "hidden drops without reordering");
+eq(resolveFields(["duration", "duration"], []).join(","), "duration,finished,ttft,tps,sent,recv,cache", "duplicate order entries collapse");
+eq(resolveFields([], ["tps"]).join(","), "finished,duration,ttft,sent,recv,cache", "hidden with default order");
+eq(resolveFields(ALL_FIELDS, ALL_FIELDS).length, 0, "hiding everything yields an empty line");
 eq(statusParts(data, ["tps", "sent"]).length, 2, "field subset");
 eq(statusLine({ ...data, aborted: true }, ["tps"]), "aborted · ⚡ 43 tok/s", "aborted prefix");
 eq(

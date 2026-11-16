@@ -3,21 +3,24 @@
 One status line per **response** in [pi](https://pi.dev), written into the transcript when the agent fully settles:
 
 ```
-⏱ 1m20s · ◷ 14:33:05 · TTFT 0.83s · ⚡ 42 tok/s · ↑ 12.3k sent · ↓ 1.2k recv · cache 88%
+◷ 14:33:05 · ⏱ 1m20s · TTFT 0.83s · ⚡ 42 tok/s · ↑ 12.3k · ↓ 1.2k · cache 88%
 ```
 
 A response is the whole unit of work: **prompt submitted → agent settled**, so every provider request, tool call,
 retry, compaction recovery, and queued continuation in between is measured as one thing.
 
-| Field | Example | Meaning |
-| --- | --- | --- |
-| `duration` | `⏱ 1m20s` | Prompt submit → fully settled. Rendered `840ms` / `20s` / `1m20s` / `1h20m` / `2d3h`. |
-| `finished` | `◷ 14:33:05` | Local wall-clock time the response finished. |
-| `ttft` | `TTFT 0.83s` | Prompt submit → **first output token** of the response (text, thinking, or tool-call args). Includes queueing and prefill. `n/a` if no token arrived. |
-| `tps` | `⚡ 42 tok/s` | Output tokens per second. Default divisor is the response duration; `mode generation` divides by streaming time only. |
-| `sent` | `↑ 12.3k sent` | Prompt tokens the provider was sent, summed over every request: `input + cache read + cache write`. |
-| `recv` | `↓ 1.2k recv` | Output tokens received, summed over every request. |
-| `cache` | `cache 88%` | `cache read / (input + cache read + cache write)` for the response. Never rounds a partial hit up to 100%; shows `<1%`, `0%`, or `n/a`. |
+| Field | Default | Example | Meaning |
+| --- | --- | --- | --- |
+| `finished` | ◷ | `◷ 14:33:05` | Local wall-clock time the response finished. |
+| `duration` | `⏱` | `⏱ 1m20s` | Prompt submit → fully settled. Rendered `840ms` / `20s` / `1m20s` / `1h20m` / `2d3h`. |
+| `ttft` | `TTFT` | `TTFT 0.83s` | Prompt submit → **first output token** of the response (text, thinking, or tool-call args). Includes queueing and prefill. `n/a` if no token arrived. |
+| `tps` | `⚡` | `⚡ 42 tok/s` | Output tokens per second. Default divisor is the response duration; `mode generation` divides by streaming time only. |
+| `sent` | `↑` | `↑ 12.3k` | Prompt tokens the provider was sent, summed over every request: `input + cache read + cache write`. |
+| `recv` | `↓` | `↓ 1.2k` | Output tokens received, summed over every request. |
+| `cache` | `cache` | `cache 88%` | `cache read / (input + cache read + cache write)` for the response. Never rounds a partial hit up to 100%; shows `<1%`, `0%`, or `n/a`. |
+
+Order and visibility are yours: `order` sets position, `show`/`hide` toggle each field, and each field keeps its own
+icon. Only `tok/s` carries a word — sent and received read from their arrows alone.
 
 Aborted runs (Escape) get an `aborted · ` prefix.
 
@@ -55,7 +58,8 @@ The status is a `prompt-status` **custom session entry** (`pi.appendEntry`) with
 ```json
 {
   "enabled": true,
-  "fields": ["duration", "finished", "ttft", "tps", "sent", "recv", "cache"],
+  "fields": ["finished", "duration", "ttft", "tps", "sent", "recv", "cache"],
+  "hidden": [],
   "tpsMode": "response",
   "sentIncludesCache": true,
   "includeNestedUsage": false,
@@ -68,7 +72,8 @@ The status is a `prompt-status` **custom session entry** (`pi.appendEntry`) with
 | Key | Default | Effect |
 | --- | --- | --- |
 | `enabled` | `true` | Write status entries at all. |
-| `fields` | all seven, in order | Which fields to render, and in what order. `["duration","tps"]` gives a two-item line. |
+| `fields` | the seven keys in the default order above | Render order. Anything left out is appended in default order, so a partial list is legal. |
+| `hidden` | `[]` | Fields kept out of the line. They stay listed in `fields`, so re-showing them lands back in position. |
 | `tpsMode` | `"response"` | `"response"`: `recv / duration`. `"generation"`: `recv / Σ streaming windows`, which excludes tool execution and inter-request gaps. |
 | `sentIncludesCache` | `true` | Include cache read/write in `sent`. Cache hit % always uses all prompt tokens either way. |
 | `includeNestedUsage` | `false` | Add usage that tools report for nested model work (subagents, classifier calls) to `sent`/`recv`. Always shown in the expanded line. |
@@ -83,8 +88,10 @@ The status is a `prompt-status` **custom session entry** (`pi.appendEntry`) with
 | Subcommand | Effect |
 | --- | --- |
 | `on` / `off` | Enable or disable the extension. |
+| `order <a,b,c>` | Set render order. Unlisted fields keep their visibility and move to the end. |
+| `fields <a,b,c>` | Render exactly these, in this order — everything else becomes hidden. |
+| `show <a,b>` / `hide <a,b>` | Toggle fields without touching the order. |
 | `mode response\|generation` | Choose the tokens/s denominator. |
-| `fields <a,b,c>` | Set rendered fields and order. |
 | `footer on\|off` | Footer mirror. |
 | `nested on\|off` | Include nested tool usage in `sent`/`recv`. |
 | `cache on\|off` | Whether `sent` includes cache tokens. |
@@ -92,6 +99,9 @@ The status is a `prompt-status` **custom session entry** (`pi.appendEntry`) with
 | `last` | Print the last status again. |
 | `stats` | Session totals: responses, wall time, streaming time, avg tok/s, avg cache hit, total sent/received. |
 | `path` / `reset` | Show or reset the config file. |
+
+Field arguments accept commas or spaces (`hide ttft cache`), and unknown names are reported instead of silently
+dropped. Hiding every field disables line rendering entirely.
 
 ## Measurement notes
 

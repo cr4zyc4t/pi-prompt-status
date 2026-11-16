@@ -9,7 +9,26 @@ export type TpsMode = "response" | "generation";
 
 export type StatusField = "duration" | "finished" | "ttft" | "tps" | "sent" | "recv" | "cache";
 
-export const ALL_FIELDS: StatusField[] = ["duration", "finished", "ttft", "tps", "sent", "recv", "cache"];
+/** Render order out of the box: finish time, duration, TTFT, tokens/s, sent, recv, cache. */
+export const ALL_FIELDS: StatusField[] = ["finished", "duration", "ttft", "tps", "sent", "recv", "cache"];
+
+export function isStatusField(value: unknown): value is StatusField {
+	return typeof value === "string" && (ALL_FIELDS as string[]).includes(value);
+}
+
+/**
+ * Normalize a requested order and visibility set.
+ *
+ * Recognized keys are applied first in the requested order; unknown keys are dropped.
+ * Fields left out of `order` keep their relative default order and land at the end.
+ * `hidden` removes a field from the rendered line without dropping it from `order`.
+ */
+export function resolveFields(order: readonly StatusField[], hidden: readonly StatusField[]): StatusField[] {
+	const seen: StatusField[] = [];
+	for (const field of order) if (isStatusField(field) && !seen.includes(field)) seen.push(field);
+	for (const field of ALL_FIELDS) if (!seen.includes(field)) seen.push(field);
+	return seen.filter((field) => !hidden.includes(field));
+}
 
 /** Status written to the session as a `prompt-status` custom entry. */
 export interface PromptStatusData {
@@ -115,31 +134,47 @@ const ICONS: Record<StatusField, string> = {
 	cache: "cache",
 };
 
+/** Only tokens/s carries a word; the rest read from their icon. */
+const LABELS: Record<StatusField, string> = {
+	duration: "",
+	finished: "",
+	ttft: "",
+	tps: "tok/s",
+	sent: "",
+	recv: "",
+	cache: "",
+};
+
+export function iconOf(field: StatusField): string {
+	return ICONS[field];
+}
+
 export function statusParts(data: PromptStatusData, fields: StatusField[]): StatusPart[] {
 	const parts: StatusPart[] = [];
 	for (const field of fields) {
 		const icon = ICONS[field];
+		const label = LABELS[field];
 		switch (field) {
 			case "duration":
-				parts.push({ icon, label: "", value: fmtDuration(data.durationMs) });
+				parts.push({ icon, label, value: fmtDuration(data.durationMs) });
 				break;
 			case "finished":
-				parts.push({ icon, label: "", value: fmtClock(data.finishedAt) });
+				parts.push({ icon, label, value: fmtClock(data.finishedAt) });
 				break;
 			case "ttft":
-				parts.push({ icon, label: "", value: fmtTtft(data.ttftMs) });
+				parts.push({ icon, label, value: fmtTtft(data.ttftMs) });
 				break;
 			case "tps":
-				parts.push({ icon, label: "tok/s", value: fmtRate(data.tps) });
+				parts.push({ icon, label, value: fmtRate(data.tps) });
 				break;
 			case "sent":
-				parts.push({ icon, label: "sent", value: fmtCount(data.sent) });
+				parts.push({ icon, label, value: fmtCount(data.sent) });
 				break;
 			case "recv":
-				parts.push({ icon, label: "recv", value: fmtCount(data.recv) });
+				parts.push({ icon, label, value: fmtCount(data.recv) });
 				break;
 			case "cache":
-				parts.push({ icon, label: "", value: fmtPct(data.cacheHitPct) });
+				parts.push({ icon, label, value: fmtPct(data.cacheHitPct) });
 				break;
 		}
 	}

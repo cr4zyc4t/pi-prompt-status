@@ -24,6 +24,8 @@ import {
 	fmtCount,
 	fmtDuration,
 	fmtRate,
+	isStatusField,
+	resolveFields,
 	statusDetail,
 	statusLine,
 	statusParts,
@@ -39,8 +41,10 @@ const CONFIG_BASENAME = "prompt-status.json";
 interface Config {
 	/** Write status entries at all. */
 	enabled: boolean;
-	/** Ordered fields to render. */
+	/** Render order for all fields; fields left out land last. */
 	fields: StatusField[];
+	/** Fields kept out of the line. They stay in `fields`, so re-showing keeps their position. */
+	hidden: StatusField[];
 	/** "response": output tokens / whole response duration. "generation": decode windows only. */
 	tpsMode: TpsMode;
 	/** Count cache read/write in the "sent" figure. Cache hit % always uses all prompt tokens. */
@@ -58,6 +62,7 @@ interface Config {
 const DEFAULTS: Config = {
 	enabled: true,
 	fields: [...ALL_FIELDS],
+	hidden: [],
 	tpsMode: "response",
 	sentIncludesCache: true,
 	includeNestedUsage: false,
@@ -117,15 +122,30 @@ function readBool(source: Record<string, unknown>, key: keyof Config, fallback: 
 	return typeof value === "boolean" ? value : fallback;
 }
 
-function readFields(value: unknown, fallback: StatusField[]): StatusField[] {
-	if (!Array.isArray(value)) return fallback;
+function readFieldList(value: unknown, fallback: StatusField[]): StatusField[] {
+	if (!Array.isArray(value)) return [...fallback];
 	const seen: StatusField[] = [];
 	for (const item of value) {
-		if (ALL_FIELDS.includes(item as StatusField) && !seen.includes(item as StatusField)) {
-			seen.push(item as StatusField);
-		}
+		if (isStatusField(item) && !seen.includes(item)) seen.push(item);
 	}
 	return seen;
+}
+
+/** Read `a,b,c` / `a b` style field arguments, collecting anything unrecognized. */
+function parseFieldArgs(words: string[]): { fields: StatusField[]; bad: string[] } {
+	const fields: StatusField[] = [];
+	const bad: string[] = [];
+	for (const word of words) {
+		for (const token of word.split(",").map((part) => part.trim()).filter(Boolean)) {
+			const key = token.toLowerCase();
+			if (isStatusField(key)) {
+				if (!fields.includes(key)) fields.push(key);
+			} else {
+				bad.push(token);
+			}
+		}
+	}
+	return { fields, bad };
 }
 
 function parseConfig(raw: string): Config {
@@ -137,7 +157,8 @@ function parseConfig(raw: string): Config {
 	const mode = source.tpsMode;
 	return {
 		enabled: readBool(source, "enabled", DEFAULTS.enabled),
-		fields: readFields(source.fields, DEFAULTS.fields),
+		fields: readFieldList(source.fields, DEFAULTS.fields),
+		hidden: readFieldList(source.hidden, []),
 		tpsMode: mode === "generation" || mode === "response" ? mode : DEFAULTS.tpsMode,
 		sentIncludesCache: readBool(source, "sentIncludesCache", DEFAULTS.sentIncludesCache),
 		includeNestedUsage: readBool(source, "includeNestedUsage", DEFAULTS.includeNestedUsage),
@@ -176,6 +197,10 @@ export default function (pi: ExtensionAPI) {
 
 	loadConfig();
 
+	function visible(): StatusField[] {
+		return resolveFields(config.fields, config.hidden);
+	}
+
 	function closeGenerationWindow(state: Open): void {
 		if (state.windowOpenMono === null) return;
 		state.generationMs += performance.now() - state.windowOpenMono;
@@ -187,7 +212,8 @@ export default function (pi: ExtensionAPI) {
 		open = null;
 		if (config.footerStatus && ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
 		if (!state) return;
-		if (!config.enabled || config.fields.length === 0) return;
+		const shown = visible();
+		if (!config.enabled || shown.length === 0) return;
 		if (!ctx.hasUI && !config.nonInteractive) return;
 		if (aborted && !config.showAborted) return;
 		// A settle with no assistant request produced nothing to report.
@@ -226,7 +252,7 @@ export default function (pi: ExtensionAPI) {
 
 		lastData = data;
 		pi.appendEntry<PromptStatusData>(ENTRY_TYPE, data);
-		if (config.footerStatus && ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, statusLine(data, config.fields, " "));
+		if (config.footerStatus && ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, statusLine(data, shown, " "));
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -298,7 +324,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerEntryRenderer<PromptStatusData>(ENTRY_TYPE, (entry, options, theme) => {
 		const data = entry.data;
 		if (!data || data.v !== 1) return undefined;
-		const parts = statusParts(data, config.fields);
+		const parts = statusParts(data, visible());
 		if (parts.length === 0) return undefined;
 		const dot = theme.fg("dim", " · ");
 		const line = parts
@@ -315,7 +341,24 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("prompt-status", {
 		description: "Per-response status: show settings, toggle fields, or summarize the session",
 		getArgumentCompletions: (prefix) => {
-			const words = ["on", "off", "status", "last", "stats", "mode", "fields", "footer", "nested", "cache", "aborted", "path", "reset"];
+			const words = [
+				"on",
+				"off",
+				"status",
+				"last",
+				"stats",
+				"mode",
+				"order",
+				"fields",
+				"show",
+				"hide",
+				"footer",
+				"nested",
+				"cache",
+				"aborted",
+				"path",
+				"reset",
+			];
 			return words.filter((w) => w.startsWith(prefix.toLowerCase())).map((name) => ({ value: name, label: name }));
 		},
 		handler: async (args, ctx) => {
@@ -344,15 +387,53 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify(`prompt-status: tokens/s = ${mode === "generation" ? "output tokens / streaming time" : "output tokens / response duration"}`, "info");
 					return;
 				}
-				case "fields": {
-					const fields = readFields(rest.join(",").split(",").map((f) => f.trim()).filter(Boolean), []);
+				case "order": {
+					const { fields, bad } = parseFieldArgs(rest);
 					if (fields.length === 0) {
-						ctx.ui.notify(`prompt-status: fields are ${ALL_FIELDS.join(", ")}`, "error");
+						ctx.ui.notify(`prompt-status: order takes fields from ${ALL_FIELDS.join(", ")}`, "error");
 						return;
 					}
-					config.fields = fields;
+					config.fields = resolveFields(fields, []);
 					saveConfig(ctx);
-					ctx.ui.notify(`prompt-status: fields = ${fields.join(", ")}`, "info");
+					ctx.ui.notify(
+						`prompt-status: order = ${config.fields.join(", ")}${bad.length ? ` (ignored: ${bad.join(", ")})` : ""}`,
+						"info",
+					);
+					return;
+				}
+				case "fields": {
+					const { fields, bad } = parseFieldArgs(rest);
+					if (fields.length === 0) {
+						ctx.ui.notify(`prompt-status: fields takes a list from ${ALL_FIELDS.join(", ")}`, "error");
+						return;
+					}
+					// Render exactly these, in this order; everything else is hidden.
+					config.fields = resolveFields(fields, []);
+					config.hidden = ALL_FIELDS.filter((field) => !fields.includes(field));
+					saveConfig(ctx);
+					ctx.ui.notify(
+						`prompt-status: showing ${fields.join(", ")}${config.hidden.length ? ` · hidden ${config.hidden.join(", ")}` : ""}${bad.length ? ` (ignored: ${bad.join(", ")})` : ""}`,
+						"info",
+					);
+					return;
+				}
+				case "show":
+				case "hide": {
+					const { fields, bad } = parseFieldArgs(rest);
+					if (fields.length === 0) {
+						ctx.ui.notify(`prompt-status: ${verb} takes fields from ${ALL_FIELDS.join(", ")}`, "error");
+						return;
+					}
+					config.fields = resolveFields(config.fields, []);
+					const hiddenSet = new Set(config.hidden);
+					if (verb === "hide") for (const field of fields) hiddenSet.add(field);
+					else for (const field of fields) hiddenSet.delete(field);
+					config.hidden = ALL_FIELDS.filter((field) => hiddenSet.has(field));
+					saveConfig(ctx);
+					ctx.ui.notify(
+						`prompt-status: ${verb === "hide" ? "hidden" : "shown"} ${fields.join(", ")} · line = ${visible().join(", ")}${bad.length ? ` (ignored: ${bad.join(", ")})` : ""}`,
+						"info",
+					);
 					return;
 				}
 				case "footer":
@@ -376,7 +457,7 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify(`prompt-status: reset to defaults`, "info");
 					return;
 				case "last":
-					ctx.ui.notify(lastData ? statusLine(lastData, config.fields, " ") : "prompt-status: no response recorded yet", "info");
+					ctx.ui.notify(lastData ? statusLine(lastData, visible(), " ") : "prompt-status: no response recorded yet", "info");
 					return;
 				case "stats": {
 					const rows: PromptStatusData[] = [];
@@ -410,10 +491,11 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify(
 						[
 							`prompt-status ${config.enabled ? "on" : "off"} · tokens/s ${config.tpsMode} · footer ${config.footerStatus ? "on" : "off"}`,
-							`fields: ${config.fields.join(", ")}`,
+							`order: ${resolveFields(config.fields, []).join(", ")}`,
+							`hidden: ${config.hidden.length ? config.hidden.join(", ") : "(none)"}`,
 							`sent ${config.sentIncludesCache ? "includes" : "excludes"} cache · nested ${config.includeNestedUsage ? "included" : "excluded"} · aborted ${config.showAborted ? "shown" : "hidden"}`,
-							lastData ? `last: ${statusLine(lastData, config.fields, " ")}` : "last: none yet",
-							`/prompt-status on|off|mode|fields|footer|nested|cache|aborted|last|stats|path|reset`,
+							lastData ? `last: ${statusLine(lastData, visible(), " ")}` : "last: none yet",
+							`/prompt-status on|off|order|fields|show|hide|mode|footer|nested|cache|aborted|last|stats|path|reset`,
 						].join("\n"),
 						"info",
 					);
