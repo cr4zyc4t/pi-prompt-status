@@ -89,6 +89,11 @@ export function fmtCost(total: number): string {
 	return trimZero(total.toFixed(4));
 }
 
+/** True when a cost is worth showing: priced, and big enough not to read as "$0". */
+export function hasCost(total: number | null | undefined): boolean {
+	return total !== null && total !== undefined && fmtCost(total) !== "0";
+}
+
 /** Time to first token: `840ms`, `1.2s`, `12s`, `1m20s`. */
 export function fmtTtft(ms: number | null): string {
 	if (ms === null || !Number.isFinite(ms) || ms < 0) return "n/a";
@@ -194,16 +199,17 @@ export function statusParts(data: PromptStatusData, fields: StatusField[]): Stat
 			case "cache":
 				parts.push({ icon, label, value: fmtPct(data.cacheHitPct) });
 				break;
-			case "cost":
-				// Omitted entirely for models without pricing data.
-				if (data.cost === null || data.cost === undefined) break;
+			case "cost": {
+				// No pricing data, or a total that rounds to zero: show nothing rather than "$0".
+				if (!hasCost(data.cost)) break;
 				parts.push({
 					icon: data.costBilled === true ? "$" : "≈$",
 					label,
-					value: fmtCost(data.cost),
+					value: fmtCost(data.cost ?? 0),
 					glue: true,
 				});
 				break;
+			}
 		}
 	}
 	return parts;

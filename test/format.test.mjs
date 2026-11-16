@@ -11,6 +11,7 @@ import {
 	fmtRate,
 	fmtTtft,
 	fmtCost,
+	hasCost,
 	resolveFields,
 	statusDetail,
 	statusLine,
@@ -110,6 +111,12 @@ eq(
 );
 eq(statusParts(data, ["cost"])[0].glue, true, "cost icon glues to the number");
 eq(statusParts({ ...data, cost: null }, ["cost"]).length, 0, "cost omitted without pricing data");
+eq(statusLine({ ...data, cost: 0 }, ALL_FIELDS).includes("$"), false, "zero cost renders nothing");
+eq(statusLine({ ...data, cost: 0.0000004 }, ALL_FIELDS).includes("$"), false, "cost rounding to zero renders nothing");
+eq(statusLine({ ...data, cost: 0.0001, costBilled: true }, ALL_FIELDS).endsWith("· $0.0001"), true, "tiny nonzero cost stays visible");
+eq(hasCost(0), false, "hasCost zero");
+eq(hasCost(null), false, "hasCost null");
+eq(hasCost(0.004), true, "hasCost priced");
 eq(statusLine({ ...data, cost: null }, ALL_FIELDS).includes("$"), false, "unpriced model shows no cost");
 eq(
 	ALL_FIELDS.join(","),

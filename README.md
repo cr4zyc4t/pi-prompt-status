@@ -6,6 +6,8 @@ One status line per **response** in [pi](https://pi.dev), written into the trans
 ◷ 14:33:05 · ⏱ 1m20s · TTFT 0.83s · ⚡ 42 tok/s · ↑ 12.3k · ↓ 1.2k · cache 88% · ≈$0.0043
 ```
 
+A free or unpriced model simply ends at `cache 88%` — the cost field hides itself.
+
 A response is the whole unit of work: **prompt submitted → agent settled**, so every provider request, tool call,
 retry, compaction recovery, and queued continuation in between is measured as one thing.
 
@@ -18,7 +20,7 @@ retry, compaction recovery, and queued continuation in between is measured as on
 | `sent` | `↑` | `↑ 12.3k` | Prompt tokens the provider was sent, summed over every request: `input + cache read + cache write`. |
 | `recv` | `↓` | `↓ 1.2k` | Output tokens received, summed over every request. |
 | `cache` | `cache` | `cache 88%` | `cache read / (input + cache read + cache write)` for the response. Never rounds a partial hit up to 100%; shows `<1%`, `0%`, or `n/a`. |
-| `cost` | `$` | `≈$0.0043` | Summed `usage.cost.total` over every request. `$` means the provider billed figure; `≈$` means pi's catalog estimate. The whole field disappears for models with no pricing data. |
+| `cost` | `$` | `≈$0.0043` | Summed `usage.cost.total` over every request. `$` means the provider billed figure; `≈$` means pi's catalog estimate. Hidden when the model has no pricing data **or** the total is zero, so free and unpriced models never show `$0`. |
 
 Order and visibility are yours: `order` sets position, `show`/`hide` toggle each field, and each field keeps its own
 icon. Only `tok/s` carries a word — sent and received read from their arrows alone.
@@ -114,8 +116,8 @@ dropped. Hiding every field disables line rendering entirely.
 - `cache` is per response, so it rises across a session as the prompt prefix gets cached, unlike pi's session-level
   cache figure.
 - Cost is the sum of what pi reports per request. `usage.cost.totalFromProvider` decides the marker: every request
-  billed → `$0.0043`, any catalog estimate → `≈$0.0043`. A model whose catalog carries no prices yields `cost = null`
-  and renders nothing at all, so unpriced models never show a misleading `$0`.
+  billed → `$0.0043`, any catalog estimate → `≈$0.0043`. The field is dropped when there is no pricing data and when
+  the total is (or rounds to) zero, so unpriced and free models show nothing instead of a misleading `$0`.
 - Nested tool usage (subagents, classifier calls) keeps its own cost in the expanded line. It enters `cost` only when
   `includeNestedUsage` is on.
 - A settle with no assistant request produces no entry, so idle `agent_settled` noise stays out of the transcript.

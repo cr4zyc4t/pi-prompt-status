@@ -23,6 +23,7 @@ import {
 	ALL_FIELDS,
 	fmtCount,
 	fmtCost,
+	hasCost,
 	fmtDuration,
 	fmtRate,
 	isStatusField,
@@ -500,13 +501,13 @@ export default function (pi: ExtensionAPI) {
 					const cacheRead = sum((d) => d.cacheRead);
 					const prompt = sum((d) => d.input + d.cacheRead + d.cacheWrite);
 					const cost = sum((d) => d.cost ?? 0);
-					const priced = rows.some((d) => typeof d.cost === "number");
-					const billed = priced && rows.every((d) => d.costBilled === true);
+					const pricedRows = rows.filter((d) => hasCost(d.cost));
+					const billed = pricedRows.length > 0 && pricedRows.every((d) => d.costBilled === true);
 					ctx.ui.notify(
 						[
 							`responses ${rows.length} · wall ${fmtDuration(wall)} · gen ${fmtDuration(gen)}`,
 							`avg ${fmtRate((recv / Math.max(1, wall)) * 1000)} tok/s · cache ${prompt > 0 ? `${Math.round((cacheRead / prompt) * 100)}%` : "n/a"}`,
-							`↑ ${fmtCount(sent)} · ↓ ${fmtCount(recv)}${priced ? ` · ${billed ? "$" : "≈$"}${fmtCost(cost)}` : ""}`,
+							`↑ ${fmtCount(sent)} · ↓ ${fmtCount(recv)}${hasCost(cost) ? ` · ${billed ? "$" : "≈$"}${fmtCost(cost)}` : ""}`,
 						].join("\n"),
 						"info",
 					);

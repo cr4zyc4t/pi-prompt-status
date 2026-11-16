@@ -181,8 +181,9 @@ check(bool(wait_for(notification("reset to defaults"), 30, "reset output")), "re
 send({"id": "c10", "type": "prompt", "message": "/prompt-status last"})
 full = wait_for(notification("TTFT"), 30, "last output after reset")
 check(full is not None and "TTFT" in full and 0 <= full.find("◷") < full.find("TTFT"), f"defaults restored, finished first: {full!r}")
-priced = isinstance((aborted or first or {}).get("cost"), (int, float))
-check(("$" in (full or "")) == priced, f"cost appears exactly when the model reports pricing (entry cost={(aborted or first or {}).get('cost')!r})")
+entry_cost = (aborted or first or {}).get("cost")
+priced = isinstance(entry_cost, (int, float)) and entry_cost > 0
+check(("$" in (full or "")) == priced, f"cost shows only when priced and nonzero (entry cost={entry_cost!r})")
 
 send({"id": "q", "type": "get_state"})
 wait_for(lambda e: e.get("type") == "response" and e.get("command") == "get_state", 30, "state")
